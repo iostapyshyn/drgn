@@ -24,6 +24,7 @@ struct drgn_error *drgn_program_parse_vmcoreinfo(struct drgn_program *prog,
 {
 	struct drgn_error *err;
 
+	prog->vmcoreinfo.phys_base = 0;
 	prog->vmcoreinfo.raw_size = descsz;
 	prog->vmcoreinfo.raw = memdup(desc, descsz);
 	if (!prog->vmcoreinfo.raw)
@@ -56,6 +57,12 @@ struct drgn_error *drgn_program_parse_vmcoreinfo(struct drgn_program *prog,
 		@case "KERNELOFFSET"@
 			err = parse_vmcoreinfo_u64(value, newline, 16,
 						   &prog->vmcoreinfo.kaslr_offset);
+			if (err)
+				return err;
+			break;
+		@case "NUMBER(phys_base)"@
+			err = parse_vmcoreinfo_u64(value, newline, 10,
+						   &prog->vmcoreinfo.phys_base);
 			if (err)
 				return err;
 			break;
@@ -107,6 +114,10 @@ struct drgn_error *drgn_program_parse_vmcoreinfo(struct drgn_program *prog,
 		return drgn_error_create(DRGN_ERROR_OTHER,
 					 "VMCOREINFO does not contain valid swapper_pg_dir");
 	}
+
+	/* Translate swapper_pg_dir to physical right away */
+	prog->vmcoreinfo.swapper_pg_dir -= START_KERNEL_MAP + prog->vmcoreinfo.phys_base;
+
 	// Everything else is optional.
 	return NULL;
 }

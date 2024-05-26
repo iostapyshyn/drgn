@@ -618,7 +618,7 @@ linux_kernel_pgtable_iterator_next_x86_64(struct drgn_program *prog,
 		bool table_physical;
 		if (level == levels) {
 			table = it->it.pgtable;
-			table_physical = false;
+			table_physical = true;
 		} else {
 			uint64_t entry = it->table[level][it->index[level]++];
 			if (bswap)

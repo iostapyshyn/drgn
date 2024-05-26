@@ -172,6 +172,12 @@ struct drgn_program {
 		/** PAGE_SHIFT of the kernel (derived from PAGE_SIZE). */
 		int page_shift;
 
+		/**
+		 * Used to convert the virtual address of an exported kernel
+                 * symbol to its corresponding physical address.
+		 */
+		uint64_t phys_base;
+
 		/** The original vmcoreinfo data, to expose as an object */
 		char *raw;
 		size_t raw_size;
