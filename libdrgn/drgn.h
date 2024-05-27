@@ -661,6 +661,10 @@ struct drgn_error *
 drgn_program_add_object_finder(struct drgn_program *prog,
 			       drgn_object_find_fn fn, void *arg);
 
+
+struct drgn_error *drgn_program_set_image(struct drgn_program *prog,
+					  const char *path);
+struct drgn_error *drgn_program_set_image_fd(struct drgn_program *prog, int fd);
 /**
  * Set a @ref drgn_program to a core dump.
  *

@@ -17,6 +17,7 @@
 #include <sys/statfs.h>
 #include <sys/types.h>
 #include <unistd.h>
+#include <sys/mman.h>
 
 #include "cleanup.h"
 #include "debug_info.h"
@@ -247,6 +248,108 @@ has_kdump_signature(struct drgn_program *prog, const char *path, bool *ret)
 		   && memcmp(signature, KDUMP_SIGNATURE, KDUMP_SIG_LEN) == 0)
 		*ret = true;
 	return NULL;
+}
+
+static struct drgn_error *
+drgn_program_set_image_fd_internal(struct drgn_program *prog, int fd,
+				   const char *path)
+{
+	struct drgn_error *err;
+
+        prog->core_fd = fd;
+
+        if (!prog->has_platform) {
+		err = drgn_error_format(DRGN_ERROR_INVALID_ARGUMENT,
+					"platform is not set");
+		goto out_fd;
+        }
+
+        err = drgn_program_add_memory_segment(prog, 0, UINT64_MAX,
+                                              read_memory_via_pgtable,
+                                              prog, false);
+        if (err)
+		goto out_segments;
+
+	off_t file_size = lseek(fd, 0, SEEK_END);
+	if (file_size < 0) {
+		err = drgn_error_format(DRGN_ERROR_OS,
+					"lseek: %s", strerror(errno));
+		goto out_fd;
+	}
+
+	/* Add the physical segments */
+	const int64_t qemu_4g_gap = 0xc0000000;
+	bool has_gap = file_size > qemu_4g_gap;
+
+	prog->file_segments = malloc_array(has_gap ? 2 : 1, sizeof(*prog->file_segments));
+	if (!prog->file_segments) {
+		err = &drgn_enomem;
+		goto out_segments;
+	}
+
+	prog->file_segments[0].file_offset = 0;
+	prog->file_segments[0].file_size = min(qemu_4g_gap, file_size);
+	prog->file_segments[0].fd = prog->core_fd;
+	prog->file_segments[0].eio_is_fault = false;
+	prog->file_segments[0].zerofill = false;
+
+	err = drgn_program_add_memory_segment(prog, 0,
+					      prog->file_segments[0].file_size,
+					      drgn_read_memory_file,
+					      &prog->file_segments[0],
+					      true);
+	if (err)
+		goto out_segments;
+
+	if (has_gap) {
+		/* The region 0xc0000000-0x100000000 is used for devices and is
+                   not in the file, requiring offset for addresses above 4G */
+
+		prog->file_segments[1].file_offset = qemu_4g_gap;
+		prog->file_segments[1].file_size = file_size - qemu_4g_gap;
+		prog->file_segments[1].fd = prog->core_fd;
+		prog->file_segments[1].eio_is_fault = false;
+		prog->file_segments[1].zerofill = false;
+
+		err = drgn_program_add_memory_segment(prog, 1ULL << 32,
+						      prog->file_segments[1].file_size,
+						      drgn_read_memory_file,
+						      &prog->file_segments[1],
+						      true);
+		if (err)
+			goto out_segments;
+	}
+
+	char *vmcoreinfo = getenv("DRGN_VMCOREINFO");
+	if (!vmcoreinfo) {
+		err = drgn_error_format(DRGN_ERROR_INVALID_ARGUMENT,
+					"DRGN_VMCOREINFO is not set");
+		goto out_segments;
+	}
+	err = drgn_program_parse_vmcoreinfo(prog, vmcoreinfo,
+					    strlen(vmcoreinfo));
+	if (err)
+		goto out_segments;
+
+	prog->flags |= DRGN_PROGRAM_IS_LINUX_KERNEL;
+	err = drgn_program_add_object_finder(prog, linux_kernel_object_find,
+					     prog);
+	if (err)
+		goto out_segments;
+	if (!prog->lang)
+		prog->lang = &drgn_language_c;
+
+	return NULL;
+
+out_segments:
+	drgn_memory_reader_deinit(&prog->reader);
+	drgn_memory_reader_init(&prog->reader);
+	free(prog->file_segments);
+	prog->file_segments = NULL;
+out_fd:
+	close(prog->core_fd);
+	prog->core_fd = -1;
+	return err;
 }
 
 static struct drgn_error *
@@ -611,6 +714,39 @@ out_fd:
 	close(prog->core_fd);
 	prog->core_fd = -1;
 	return err;
+}
+
+LIBDRGN_PUBLIC struct drgn_error *
+drgn_program_set_image_fd(struct drgn_program *prog, int fd)
+{
+	struct drgn_error *err;
+
+	err = drgn_program_check_initialized(prog);
+	if (err)
+		return err;
+
+	#define FORMAT "/proc/self/fd/%d"
+	char path[sizeof(FORMAT) - sizeof("%d") + max_decimal_length(int) + 1];
+	snprintf(path, sizeof(path), FORMAT, fd);
+	#undef FORMAT
+
+	return drgn_program_set_image_fd_internal(prog, fd, path);
+}
+
+LIBDRGN_PUBLIC struct drgn_error *
+drgn_program_set_image(struct drgn_program *prog, const char *path)
+{
+	struct drgn_error *err;
+
+	err = drgn_program_check_initialized(prog);
+	if (err)
+		return err;
+
+	int fd = open(path, O_RDONLY);
+	if (fd == -1)
+		return drgn_error_create_os("open", errno, path);
+
+	return drgn_program_set_image_fd_internal(prog, fd, path);
 }
 
 LIBDRGN_PUBLIC struct drgn_error *

@@ -602,6 +602,27 @@ static PyObject *Program_add_symbol_finder(Program *self, PyObject *args,
 	Py_RETURN_NONE;
 }
 
+static PyObject *Program_set_image(Program *self, PyObject *args,
+				   PyObject *kwds)
+{
+	static char *keywords[] = {"path", NULL};
+	struct drgn_error *err;
+	struct path_arg path = { .allow_fd = true };
+
+	if (!PyArg_ParseTupleAndKeywords(args, kwds, "O&:set_image",
+					 keywords, path_converter, &path))
+		return NULL;
+
+	if (path.fd >= 0)
+		err = drgn_program_set_image_fd(&self->prog, path.fd);
+	else
+		err = drgn_program_set_image(&self->prog, path.path);
+	path_cleanup(&path);
+	if (err)
+		return set_drgn_error(err);
+	Py_RETURN_NONE;
+}
+
 static PyObject *Program_set_core_dump(Program *self, PyObject *args,
 				       PyObject *kwds)
 {
@@ -1254,7 +1275,9 @@ static PyMethodDef Program_methods[] = {
 	{"add_object_finder", (PyCFunction)Program_add_object_finder,
 	 METH_VARARGS | METH_KEYWORDS, drgn_Program_add_object_finder_DOC},
 	{"add_symbol_finder", (PyCFunction)Program_add_symbol_finder,
-	 METH_VARARGS | METH_KEYWORDS, drgn_Program_add_symbol_finder_DOC},
+	METH_VARARGS | METH_KEYWORDS, drgn_Program_add_symbol_finder_DOC},
+	{"set_image", (PyCFunction)Program_set_image,
+	 METH_VARARGS | METH_KEYWORDS},
 	{"set_core_dump", (PyCFunction)Program_set_core_dump,
 	 METH_VARARGS | METH_KEYWORDS, drgn_Program_set_core_dump_DOC},
 	{"set_kernel", (PyCFunction)Program_set_kernel, METH_NOARGS,
